@@ -1,33 +1,14 @@
 import ctypes
 import ctypes.wintypes
-
-class WINHTTP_CURRENT_USER_IE_PROXY_CONFIG(ctypes.Structure):
-    _fields_ = [
-        ("AutoDetect", ctypes.wintypes.BOOL),
-        ("AutoConfigUrl", ctypes.wintypes.LPWSTR),
-        ("Proxy", ctypes.wintypes.LPWSTR),
-        ("ProxyBypass", ctypes.wintypes.LPWSTR)
-    ]
-
-INTERNET_PORT = ctypes.c_uint
-WINHTTP_AUTH_TARGET_PROXY = ctypes.wintypes.DWORD(1)
+ 
+winhttp = ctypes.windll.winhttp
+ 
+WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY = 4
 WINHTTP_NO_PROXY_NAME = None
 WINHTTP_NO_PROXY_BYPASS = None
-winhttp = ctypes.windll.winhttp
-winhttp.WinHttpGetIEProxyConfigForCurrentUser.restypes = ctypes.wintypes.BOOL
-winhttp.WinHttpGetIEProxyConfigForCurrentUser.argtypes = [
-    ctypes.POINTER(WINHTTP_CURRENT_USER_IE_PROXY_CONFIG)
-]
-winhttp.WinHttpSetCredentials.restypes = ctypes.wintypes.BOOL
-winhttp.WinHttpSetCredentials.argtypes = [
-    ctypes.HANDLE,
-    ctypes.wintypes.DWORD,
-    ctypes.wintypes.DWORD,
-    ctypes.wintypes.LPWSTR,
-    ctypes.wintypes.LPWSTR,
-    ctypes.wintypes.LPVOID
-]
-winhttp.WinHttpOpen.restypes = ctypes.wintypes.HANDLE
+WINHTTP_FLAG_ASYNC = 0
+ 
+winhttp.WinHttpOpen.restype = ctypes.wintypes.HANDLE
 winhttp.WinHttpOpen.argtypes = [
     ctypes.wintypes.LPCWSTR,
     ctypes.wintypes.DWORD,
@@ -35,54 +16,114 @@ winhttp.WinHttpOpen.argtypes = [
     ctypes.wintypes.LPCWSTR,
     ctypes.wintypes.DWORD,
 ]
-winhttp.WinHttpConnect.restypes = ctypes.wintypes.HANDLE
+ 
+winhttp.WinHttpConnect.restype = ctypes.wintypes.HANDLE
 winhttp.WinHttpConnect.argtypes = [
     ctypes.wintypes.HANDLE,
     ctypes.wintypes.LPCWSTR,
-    INTERNET_PORT,
+    ctypes.c_uint,
     ctypes.wintypes.DWORD
 ]
-
-
-
-
-
-
-
-
-
-
-
-
-hSession = winhttp.WinHttpOpen(
-    "Testing stuff fo sho",
-    4,
-    WINHTTP_NO_PROXY_NAME
-    WINHTTP_NO_PROXY_BYPASS,
-    0
+ 
+winhttp.WinHttpOpenRequest.restype = ctypes.wintypes.HANDLE
+winhttp.WinHttpOpenRequest.argtypes = [
+    ctypes.wintypes.HANDLE,
+    ctypes.wintypes.LPCWSTR,
+    ctypes.wintypes.LPCWSTR,
+    ctypes.wintypes.LPCWSTR,
+    ctypes.wintypes.LPCWSTR,
+    ctypes.wintypes.LPCWSTR,
+    ctypes.wintypes.DWORD
+]
+ 
+winhttp.WinHttpSendRequest.restype = ctypes.wintypes.BOOL
+winhttp.WinHttpSendRequest.argtypes = [
+    ctypes.wintypes.HANDLE,
+    ctypes.wintypes.LPCWSTR,
+    ctypes.wintypes.DWORD,
+    ctypes.wintypes.LPVOID,
+    ctypes.wintypes.DWORD,
+    ctypes.wintypes.DWORD,
+    ctypes.c_void_p
+]
+ 
+winhttp.WinHttpReceiveResponse.restype = ctypes.wintypes.BOOL
+winhttp.WinHttpReceiveResponse.argtypes = [
+    ctypes.wintypes.HANDLE,
+    ctypes.wintypes.LPVOID
+]
+ 
+winhttp.WinHttpReadData.restype = ctypes.wintypes.BOOL
+ 
+ 
+hInternet = winhttp.WinHttpOpen(
+    ctypes.wintypes.LPCWSTR("Testing"),
+    WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+    WINHTTP_NO_PROXY_NAME,
+    WINHTTP_NO_PROXY_BYPASS, 
+    WINHTTP_FLAG_ASYNC
 )
-
-if not hSession:
-    raise ValueError("Failed")
-
-hConnect = WinHttpConnect(
-    hSession,
-    "www.google.com",
+ 
+hConnect = winhttp.WinHttpConnect(
+    hInternet,
+    "raw.githubusercontent.com",
     0,
     0
 )
-
-
-
-
-
-
-proxy_config = WINHTTP_CURRENT_USER_IE_PROXY_CONFIG()
-resp = winhttp.WinHttpGetIEProxyConfigForCurrentUser(
-    ctypes.byref(proxy_config)
+ 
+hRequest = winhttp.WinHttpOpenRequest(
+    ctypes.c_void_p(hConnect),
+    ctypes.c_wchar_p("GET"),
+    ctypes.c_wchar_p("/operatorequals/httpimport/master/httpimport.py"),
+    ctypes.c_wchar_p(None),
+    ctypes.c_wchar_p(None),
+    ctypes.c_wchar_p(None),
+    ctypes.wintypes.DWORD(0x00000000)
 )
-
-#resp = winhttp.WinHttpSetCredentials(
-#    ctypes.HANDLE(0),
-#    WINHTTP_AUTH_TARGET_PROXY,
-#)
+ 
+headerBuffer = ctypes.c_void_p()
+ 
+resp = winhttp.WinHttpSendRequest(
+    hRequest,
+    None,
+    0,
+    headerBuffer,
+    0,
+    0,
+    0
+)
+ 
+resp = winhttp.WinHttpReceiveResponse(
+    hRequest,
+    None
+)
+ 
+ 
+bytesAvailable = ctypes.c_ulong(0)
+ 
+winhttp.WinHttpQueryDataAvailable.restype = ctypes.wintypes.BOOL
+resp = winhttp.WinHttpQueryDataAvailable(
+    ctypes.wintypes.HANDLE(hRequest),
+    ctypes.byref(bytesAvailable)
+)
+ 
+payload = b""
+ 
+while bytesAvailable.value:
+    readBuffer = (ctypes.c_ubyte * bytesAvailable.value)()
+    bytesToRead = ctypes.wintypes.DWORD(bytesAvailable.value)
+    bytesRead = ctypes.wintypes.DWORD(0)
+    resp = winhttp.WinHttpReadData(
+        ctypes.c_void_p(hRequest),
+        ctypes.byref(readBuffer),
+        bytesToRead,
+        ctypes.byref(bytesRead)
+    )
+    payload += bytes(readBuffer)
+    resp = winhttp.WinHttpQueryDataAvailable(
+        ctypes.wintypes.HANDLE(hRequest),
+        ctypes.byref(bytesAvailable)
+    )
+ 
+ 
+payload = payload.decode()
