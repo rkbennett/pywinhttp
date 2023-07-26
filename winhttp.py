@@ -9,7 +9,9 @@ WINHTTP_NO_PROXY_BYPASS = None
 WINHTTP_FLAG_ASYNC = 0
 WINHTTP_AUTH_TARGET_PROXY = 1
 WINHTTP_AUTH_SCHEME_NEGOTIATE = 16
+WINHTTP_AUTOLOGON_SECURITY_LEVEL_LOW = ctypes.wintypes.DWORD(1)
 WINHTTP_AUTOLOGON_SECURITY_LEVEL_MEDIUM = ctypes.wintypes.DWORD(0)
+WINHTTP_AUTOLOGON_SECURITY_LEVEL_HIGH = ctypes.wintypes.DWORD(2)
 WINHTTP_OPTION_AUTOLOGON_POLICY = 77
  
 errors = {
@@ -63,11 +65,11 @@ errors = {
     12186: "ERROR_WINHTTP_CLIENT_CERT_NO_ACCESS_PRIVATE_KEY"
 }
  
-def raise_error(error_code):
-    if error_code in errors:
-        raise WindowsError(f"[{error_code}] {errors[error_code]}")
-    else:
-        raise WindowsError(f"[{error_code}] Unknown error")
+securityLevels = {
+    "low": WINHTTP_AUTOLOGON_SECURITY_LEVEL_LOW,
+    "medium": WINHTTP_AUTOLOGON_SECURITY_LEVEL_MEDIUM,
+    "high": WINHTTP_AUTOLOGON_SECURITY_LEVEL_HIGH
+}
  
 winhttp.WinHttpOpen.restype = ctypes.wintypes.HANDLE
 winhttp.WinHttpOpen.argtypes = [
@@ -143,120 +145,144 @@ winhttp.WinHttpSetOption.argtypes = [
  
 winhttp.WinHttpSetCredentials.restype = ctypes.wintypes.BOOL
  
-hInternet = winhttp.WinHttpOpen(
-    ctypes.wintypes.LPCWSTR("Testing"),
-    WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
-    WINHTTP_NO_PROXY_NAME,
-    WINHTTP_NO_PROXY_BYPASS, 
-    WINHTTP_FLAG_ASYNC
-)
- 
-if not hInternet or int(hInternet) < 1:
-    raise_error(ctypes.GetLastError())
- 
-hConnect = winhttp.WinHttpConnect(
-    hInternet,
-    "raw.githubusercontent.com",
-    0,
-    0
-)
- 
-if not hConnect or int(hConnect) < 1:
-    raise_error(ctypes.GetLastError())
- 
-hRequest = winhttp.WinHttpOpenRequest(
-    ctypes.c_void_p(hConnect),
-    ctypes.c_wchar_p("GET"),
-    ctypes.c_wchar_p("/operatorequals/httpimport/master/httpimport.py"),
-    ctypes.c_wchar_p(None),
-    ctypes.c_wchar_p(None),
-    ctypes.c_wchar_p(None),
-    ctypes.wintypes.DWORD(0x00000000)
-)
- 
-if not hRequest or hRequest < 1:
-    raise_error(ctypes.GetLastError())
- 
-result = winhttp.WinHttpSetOption(
-    hRequest,
-    WINHTTP_OPTION_AUTOLOGON_POLICY,
-    ctypes.byref(WINHTTP_AUTOLOGON_SECURITY_LEVEL_MEDIUM),
-    ctypes.sizeof(WINHTTP_AUTOLOGON_SECURITY_LEVEL_MEDIUM)
-)
+class request(object):
+    def __init__(self):
+        self.hInternet = None
+        self.hConnect = None
+        self.hRequest = None
+        self.userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
  
  
-#result = winhttp.WinHttpSetCredentials(
-#    ctypes.c_void_p(hRequest),
-#    ctypes.wintypes.DWORD(WINHTTP_AUTH_TARGET_PROXY),
-#    ctypes.wintypes.DWORD(WINHTTP_AUTH_SCHEME_NEGOTIATE),
-#    ,
-#    ,
-#    ctypes.wintypes.LPVOID(None)
-#)
+    def raise_error(self, error_code):
+        if error_code in errors:
+            raise WindowsError(f"[{error_code}] {errors[error_code]}")
+        else:
+            raise WindowsError(f"[{error_code}] Unknown error")
  
+    def Request(self, url, userAgent=None, data=None, securityLevel="medium"):
+        if userAgent:
+            self.userAgent = userAgent
  
+        if not data:
+            self.method = "GET"
  
+        if securityLevel.lower() not in ["low", "medium", "high"]:
+            self.securityLevel = securityLevels["medium"]
+        else:
+            self.securityLevel = securityLevels[securityLevel.lower()]
  
-headerBuffer = ctypes.c_void_p()
+        spliturl = url.split('http://')[-1].split('https://')[-1].split('/')
+        hostname = spliturl[0]
+        path = "/" + "/".join(spliturl[1:])
  
-result = winhttp.WinHttpSendRequest(
-    hRequest,
-    None,
-    0,
-    headerBuffer,
-    0,
-    0,
-    0
-)
+        self.hInternet = winhttp.WinHttpOpen(
+            ctypes.wintypes.LPCWSTR(self.userAgent),
+            WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+            WINHTTP_NO_PROXY_NAME,
+            WINHTTP_NO_PROXY_BYPASS, 
+            WINHTTP_FLAG_ASYNC
+        )
  
-if not result:
-    raise_error(ctypes.GetLastError())
+        if not self.hInternet or int(self.hInternet) < 1:
+            self.raise_error(ctypes.GetLastError())
  
-result = winhttp.WinHttpReceiveResponse(
-    hRequest,
-    None
-)
+        self.hConnect = winhttp.WinHttpConnect(
+            self.hInternet,
+            hostname,
+            0,
+            0
+        )
  
-if not result:
-    raise_error(ctypes.GetLastError())
+        if not self.hConnect or int(self.hConnect) < 1:
+            self.raise_error(ctypes.GetLastError())
  
-bytesAvailable = ctypes.c_ulong(0)
+        self.hRequest = winhttp.WinHttpOpenRequest(
+            ctypes.c_void_p(self.hConnect),
+            ctypes.c_wchar_p(self.method),
+            ctypes.c_wchar_p(path),
+            ctypes.c_wchar_p(None),
+            ctypes.c_wchar_p(None),
+            ctypes.c_wchar_p(None),
+            ctypes.wintypes.DWORD(0x00000000)
+        )
  
-result = winhttp.WinHttpQueryDataAvailable(
-    hRequest,
-    bytesAvailable
-)
+        if not self.hRequest or self.hRequest < 1:
+            self.raise_error(ctypes.GetLastError())
  
-if not result:
-    raise_error(ctypes.GetLastError())
+        result = winhttp.WinHttpSetOption(
+            self.hRequest,
+            WINHTTP_OPTION_AUTOLOGON_POLICY,
+            ctypes.byref(self.securityLevel),
+            ctypes.sizeof(self.securityLevel)
+        )
  
-payload = b""
+        if not result:
+            self.raise_error(ctypes.GetLastError())
  
-while bytesAvailable.value:
-    readBuffer = (ctypes.c_ubyte * bytesAvailable.value)()
-    bytesToRead = bytesAvailable.value
-    bytesRead = ctypes.wintypes.DWORD(0)
-    result = winhttp.WinHttpReadData(
-        hRequest,
-        readBuffer,
-        bytesToRead,
-        bytesRead
-    )
-    if not result:
-        raise_error(ctypes.GetLastError())
-    payload += bytes(readBuffer)
-    result = winhttp.WinHttpQueryDataAvailable(
-        hRequest,
-        bytesAvailable
-    )
-    if not result:
-        raise_error(ctypes.GetLastError())
+    def read(self):
+        headerBuffer = ctypes.c_void_p()
  
-payload = payload.decode()
+        result = winhttp.WinHttpSendRequest(
+            self.hRequest,
+            None,
+            0,
+            headerBuffer,
+            0,
+            0,
+            0
+        )
  
-result = winhttp.WinHttpCloseHandle(
-    hInternet
-)
+        if not result:
+            self.raise_error(ctypes.GetLastError())
  
-if not result:
-    raise_error(ctypes.GetLastError())
+        result = winhttp.WinHttpReceiveResponse(
+            self.hRequest,
+            None
+        )
+ 
+        if not result:
+            self.raise_error(ctypes.GetLastError())
+ 
+        bytesAvailable = ctypes.c_ulong(0)
+ 
+        result = winhttp.WinHttpQueryDataAvailable(
+            self.hRequest,
+            bytesAvailable
+        )
+ 
+        if not result:
+            self.raise_error(ctypes.GetLastError())
+ 
+        payload = b""
+ 
+        while bytesAvailable.value:
+            readBuffer = (ctypes.c_ubyte * bytesAvailable.value)()
+            bytesToRead = bytesAvailable.value
+            bytesRead = ctypes.wintypes.DWORD(0)
+            result = winhttp.WinHttpReadData(
+                self.hRequest,
+                readBuffer,
+                bytesToRead,
+                bytesRead
+            )
+            if not result:
+                self.raise_error(ctypes.GetLastError())
+            payload += bytes(readBuffer)
+            result = winhttp.WinHttpQueryDataAvailable(
+                self.hRequest,
+                bytesAvailable
+            )
+            if not result:
+                self.raise_error(ctypes.GetLastError())
+ 
+        return payload.decode()
+ 
+    def close(self):
+        result = winhttp.WinHttpCloseHandle(
+            self.hInternet
+        )
+ 
+        self.hInternet = None
+ 
+        if not result:
+            raise_error(ctypes.GetLastError())
