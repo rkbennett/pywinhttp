@@ -67,7 +67,7 @@ def raise_error(error_code):
     if error_code in errors:
         raise WindowsError(f"[{error_code}] {errors[error_code]}")
     else:
-        raise WindowsError("[{error_code}] Unknown error")
+        raise WindowsError(f"[{error_code}] Unknown error")
  
 winhttp.WinHttpOpen.restype = ctypes.wintypes.HANDLE
 winhttp.WinHttpOpen.argtypes = [
