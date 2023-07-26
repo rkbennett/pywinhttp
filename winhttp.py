@@ -144,6 +144,14 @@ winhttp.WinHttpSetOption.argtypes = [
 ]
  
 winhttp.WinHttpSetCredentials.restype = ctypes.wintypes.BOOL
+winhttp.WinHttpSetCredentials.argtypes = [
+    ctypes.wintypes.HANDLE,
+    ctypes.wintypes.DWORD,
+    ctypes.wintypes.DWORD,
+    ctypes.wintypes.LPCWSTR,
+    ctypes.wintypes.LPCWSTR,
+    ctypes.wintypes.LPVOID
+]
  
 class request(object):
     def __init__(self):
@@ -215,6 +223,15 @@ class request(object):
             ctypes.byref(self.securityLevel),
             ctypes.sizeof(self.securityLevel)
         )
+ 
+        #result = winhttp.WinHttpSetCredentials(
+        #    self.hRequest,
+        #    WINHTTP_AUTH_TARGET_PROXY,
+        #    WINHTTP_AUTH_SCHEME_NEGOTIATE,
+        #    None,
+        #    None,
+        #    None
+        #)
  
         if not result:
             self.raise_error(ctypes.GetLastError())
