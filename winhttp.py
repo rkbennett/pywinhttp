@@ -15,11 +15,14 @@ WINHTTP_AUTOLOGON_SECURITY_LEVEL_HIGH = ctypes.wintypes.DWORD(2)
 WINHTTP_OPTION_AUTOLOGON_POLICY = 77
 WINHTTP_QUERY_RAW_HEADERS = WINHTTP_QUERY_EX_ALL_HEADERS = 21
 WINHTTP_QUERY_RAW_HEADERS_CRLF = 22
+WINHTTP_QUERY_CONTENT_LENGTH = 5
 WINHTTP_QUERY_CUSTOM = 65535
 WINHTTP_QUERY_FLAG_WIRE_ENCODING = 16777216
+ERROR_INSUFFICIENT_BUFFER = 122
 
 errors = {
     6: "ERROR_INVALID_HANDLE",
+    ERROR_INSUFFICIENT_BUFFER: "ERROR_INSUFFICIENT_BUFFER",
     12001: "ERROR_WINHTTP_OUT_OF_HANDLES",
     12002: "ERROR_WINHTTP_TIMEOUT",
     12004: "ERROR_WINHTTP_INTERNAL_ERROR",
@@ -293,6 +296,7 @@ class request(object):
         if not result:
             self.raise_error(ctypes.GetLastError())
 
+        ####
         try:
             winhttp.WinHttpQueryHeadersEx.restype = ctypes.wintypes.DWORD
             headerStruct = WINHTTP_EXTENDED_HEADER()
@@ -311,21 +315,33 @@ class request(object):
                 ctypes.byref(headerCount)
             )
         except AttributeError as e:
-            headerBuffer = (ctypes.c_ubyte * 9999)()
+            headerSize = ctypes.wintypes.DWORD(0)
             result = winhttp.WinHttpQueryHeaders(
-                self.hRequest,
+                req.hRequest,
                 WINHTTP_QUERY_RAW_HEADERS_CRLF,
                 None,
-                ctypes.byref(headerBuffer),
-                ctypes.wintypes.DWORD(ctypes.sizeof(headerBuffer)),
+                None,
+                headerSize,
                 None
             )
+
+            if not result and ctypes.GetLastError() == ERROR_INSUFFICIENT_BUFFER:
+                headerBuffer = (ctypes.c_ubyte * headerSize.value)()
+                result = winhttp.WinHttpQueryHeaders(
+                    req.hRequest,
+                    WINHTTP_QUERY_RAW_HEADERS_CRLF,
+                    None,
+                    ctypes.byref(headerBuffer),
+                    ctypes.wintypes.DWORD(ctypes.sizeof(headerBuffer)),
+                    None
+                )
 
         if not result:
             self.raise_error(ctypes.GetLastError())
 
-        rawHeaders = bytes(headerBuffer)[0:1998].decode('utf-16').rstrip('\0').split('\r\n')[1:-2]
+        rawHeaders = bytes(headerBuffer).decode('utf-16').rstrip('\0').split('\r\n')[1:-2]
         self.responseHeaders = [{header.split(':')[0]:header.split(':')[1].lstrip()} for header in rawHeaders]
+        ####
 
         bytesAvailable = ctypes.c_ulong(0)
 
