@@ -13,6 +13,10 @@ WINHTTP_AUTOLOGON_SECURITY_LEVEL_LOW = ctypes.wintypes.DWORD(1)
 WINHTTP_AUTOLOGON_SECURITY_LEVEL_MEDIUM = ctypes.wintypes.DWORD(0)
 WINHTTP_AUTOLOGON_SECURITY_LEVEL_HIGH = ctypes.wintypes.DWORD(2)
 WINHTTP_OPTION_AUTOLOGON_POLICY = 77
+WINHTTP_QUERY_RAW_HEADERS = WINHTTP_QUERY_EX_ALL_HEADERS = 21
+WINHTTP_QUERY_RAW_HEADERS_CRLF = 22
+WINHTTP_QUERY_CUSTOM = 65535
+WINHTTP_QUERY_FLAG_WIRE_ENCODING = 16777216
 
 errors = {
     6: "ERROR_INVALID_HANDLE",
@@ -71,6 +75,24 @@ securityLevels = {
     "high": WINHTTP_AUTOLOGON_SECURITY_LEVEL_HIGH
 }
 
+class WINHTTP_HEADER_NAME(ctypes.Union):
+    _fields_ = [
+        ("pwszName",ctypes.c_wchar_p),
+        ("pszName",ctypes.c_char_p),
+    ]
+
+class WINHTTP_HEADER_VALUE(ctypes.Union):
+    _fields_ = [
+        ("pwszValue",ctypes.c_wchar_p),
+        ("pszValue",ctypes.c_char_p),
+    ]
+
+class WINHTTP_EXTENDED_HEADER(ctypes.Structure):
+    _anonymous_ = (
+        "WINHTTP_HEADER_NAME", 
+        "WINHTTP_HEADER_VALUE"
+    )
+
 winhttp.WinHttpOpen.restype = ctypes.wintypes.HANDLE
 winhttp.WinHttpOpen.argtypes = [
     ctypes.wintypes.LPCWSTR,
@@ -116,6 +138,16 @@ winhttp.WinHttpReceiveResponse.argtypes = [
     ctypes.wintypes.LPVOID
 ]
 
+winhttp.WinHttpQueryHeaders.restype = ctypes.wintypes.BOOL
+winhttp.WinHttpQueryHeaders.argtypes = [
+    ctypes.wintypes.HANDLE,
+    ctypes.wintypes.DWORD,
+    ctypes.wintypes.LPCWSTR,
+    ctypes.c_void_p,
+    ctypes.wintypes.LPDWORD,
+    ctypes.wintypes.LPDWORD
+]
+
 winhttp.WinHttpQueryDataAvailable.restype = ctypes.wintypes.BOOL
 winhttp.WinHttpQueryDataAvailable.argtypes = [
     ctypes.wintypes.HANDLE,
@@ -153,13 +185,14 @@ winhttp.WinHttpSetCredentials.argtypes = [
     ctypes.wintypes.LPVOID
 ]
 
-
 class request(object):
     def __init__(self):
         self.hInternet = None
         self.hConnect = None
         self.hRequest = None
+        self.headers = None
         self.userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+
 
     def raise_error(self, error_code):
         if error_code in errors:
@@ -187,7 +220,7 @@ class request(object):
             ctypes.wintypes.LPCWSTR(self.userAgent),
             WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
             WINHTTP_NO_PROXY_NAME,
-            WINHTTP_NO_PROXY_BYPASS,
+            WINHTTP_NO_PROXY_BYPASS, 
             WINHTTP_FLAG_ASYNC
         )
 
@@ -224,14 +257,14 @@ class request(object):
             ctypes.sizeof(self.securityLevel)
         )
 
-        # result = winhttp.WinHttpSetCredentials(
+        #result = winhttp.WinHttpSetCredentials(
         #    self.hRequest,
         #    WINHTTP_AUTH_TARGET_PROXY,
         #    WINHTTP_AUTH_SCHEME_NEGOTIATE,
         #    None,
         #    None,
         #    None
-        # )
+        #)
 
         if not result:
             self.raise_error(ctypes.GetLastError())
@@ -259,6 +292,40 @@ class request(object):
 
         if not result:
             self.raise_error(ctypes.GetLastError())
+
+        try:
+            winhttp.WinHttpQueryHeadersEx.restype = ctypes.wintypes.DWORD
+            headerStruct = WINHTTP_EXTENDED_HEADER()
+            headerCount = ctypes.wintypes.DWORD()
+            headerBuffer = (ctypes.c_ubyte * 9999)()
+            result = winhttp.WinHttpQueryHeadersEx(
+                ctypes.wintypes.HANDLE(self.hRequest),
+                ctypes.wintypes.DWORD(WINHTTP_QUERY_EX_ALL_HEADERS),
+                ctypes.c_ulonglong(0),
+                ctypes.c_uint(0),
+                ctypes.wintypes.PDWORD(None),
+                None, #byref(winhttp_header),
+                ctypes.byref(headerBuffer),
+                ctypes.wintypes.PDWORD(ctypes.sizeof(headerBuffer)),
+                ctypes.wintypes.HANDLE(headerStruct),
+                ctypes.byref(headerCount)
+            )
+        except AttributeError as e:
+            headerBuffer = (ctypes.c_ubyte * 9999)()
+            result = winhttp.WinHttpQueryHeaders(
+                self.hRequest,
+                WINHTTP_QUERY_RAW_HEADERS_CRLF,
+                None,
+                ctypes.byref(headerBuffer),
+                ctypes.wintypes.DWORD(ctypes.sizeof(headerBuffer)),
+                None
+            )
+
+        if not result:
+            self.raise_error(ctypes.GetLastError())
+
+        rawHeaders = bytes(headerBuffer)[0:1998].decode('utf-16').rstrip('\0').split('\r\n')[1:-2]
+        self.responseHeaders = [{header.split(':')[0]:header.split(':')[1].lstrip()} for header in rawHeaders]
 
         bytesAvailable = ctypes.c_ulong(0)
 
