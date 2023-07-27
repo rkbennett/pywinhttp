@@ -1,3 +1,4 @@
+import json
 import ctypes
 import ctypes.wintypes
 
@@ -194,6 +195,8 @@ class request(object):
         self.hConnect = None
         self.hRequest = None
         self.headers = None
+        self.responseHeaders = None
+        self.content = None
         self.userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
 
 
@@ -296,7 +299,6 @@ class request(object):
         if not result:
             self.raise_error(ctypes.GetLastError())
 
-        ####
         try:
             winhttp.WinHttpQueryHeadersEx.restype = ctypes.wintypes.DWORD
             headerStruct = WINHTTP_EXTENDED_HEADER()
@@ -317,7 +319,7 @@ class request(object):
         except AttributeError as e:
             headerSize = ctypes.wintypes.DWORD(0)
             result = winhttp.WinHttpQueryHeaders(
-                req.hRequest,
+                self.hRequest,
                 WINHTTP_QUERY_RAW_HEADERS_CRLF,
                 None,
                 None,
@@ -328,7 +330,7 @@ class request(object):
             if not result and ctypes.GetLastError() == ERROR_INSUFFICIENT_BUFFER:
                 headerBuffer = (ctypes.c_ubyte * headerSize.value)()
                 result = winhttp.WinHttpQueryHeaders(
-                    req.hRequest,
+                    self.hRequest,
                     WINHTTP_QUERY_RAW_HEADERS_CRLF,
                     None,
                     ctypes.byref(headerBuffer),
@@ -341,7 +343,6 @@ class request(object):
 
         rawHeaders = bytes(headerBuffer).decode('utf-16').rstrip('\0').split('\r\n')[1:-2]
         self.responseHeaders = [{header.split(':')[0]:header.split(':')[1].lstrip()} for header in rawHeaders]
-        ####
 
         bytesAvailable = ctypes.c_ulong(0)
 
@@ -375,7 +376,16 @@ class request(object):
             if not result:
                 self.raise_error(ctypes.GetLastError())
 
-        return payload.decode()
+        self.content = payload.decode()
+
+        return self.content
+
+    def json(self):
+        if not self.hRequest:
+            raise BaseException("No Request object exists, Request() object must be instantiated")
+        if not self.content:
+            self.read()
+        return json.loads(self.content)
 
     def close(self):
         result = winhttp.WinHttpCloseHandle(
@@ -386,3 +396,4 @@ class request(object):
 
         if not result:
             raise_error(ctypes.GetLastError())
+
