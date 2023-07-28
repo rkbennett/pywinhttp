@@ -20,6 +20,8 @@ WINHTTP_QUERY_CONTENT_LENGTH = 5
 WINHTTP_QUERY_CUSTOM = 65535
 WINHTTP_QUERY_FLAG_WIRE_ENCODING = 16777216
 ERROR_INSUFFICIENT_BUFFER = 122
+WINHTTP_OPTION_PROXY_USERNAME = 0x1002
+WINHTTP_OPTION_PROXY_PASSWORD = 0x1003
 
 errors = {
     6: "ERROR_INVALID_HANDLE",
@@ -152,6 +154,14 @@ winhttp.WinHttpQueryHeaders.argtypes = [
     ctypes.wintypes.LPDWORD
 ]
 
+winhttp.WinHttpQueryOption.restype = ctypes.wintypes.BOOL
+winhttp.WinHttpQueryOption.argtypes = [
+    ctypes.wintypes.HANDLE,
+    ctypes.wintypes.DWORD,
+    ctypes.c_void_p,
+    ctypes.wintypes.LPDWORD
+]
+
 winhttp.WinHttpQueryDataAvailable.restype = ctypes.wintypes.BOOL
 winhttp.WinHttpQueryDataAvailable.argtypes = [
     ctypes.wintypes.HANDLE,
@@ -197,6 +207,8 @@ class request(object):
         self.headers = None
         self.responseHeaders = None
         self.content = None
+        self.proxyUsername = None
+        self.usernamePassword = None
         self.userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
 
 
@@ -397,3 +409,49 @@ class request(object):
         if not result:
             raise_error(ctypes.GetLastError())
 
+    def get_proxy_creds(self):
+        optionSize = ctypes.wintypes.DWORD(0)
+        result = winhttp.WinHttpQueryOption(
+            self.hRequest,
+            WINHTTP_OPTION_PROXY_USERNAME,
+            None,
+            optionSize
+        )
+
+        if not result and ctypes.GetLastError() == ERROR_INSUFFICIENT_BUFFER:
+            usernameBuffer = (ctypes.c_ubyte * optionSize.value)()
+
+            result = winhttp.WinHttpQueryOption(
+                self.hRequest,
+                WINHTTP_OPTION_PROXY_USERNAME,
+                optionBuffer,
+                optionSize
+            )
+
+        if not result:
+            self.raise_error(ctypes.GetLastError())
+
+        self.proxyUsername = bytes(usernameBuffer)
+
+        optionSize = ctypes.wintypes.DWORD(0)
+        result = winhttp.WinHttpQueryOption(
+            self.hRequest,
+            WINHTTP_OPTION_PROXY_PASSWORD,
+            None,
+            optionSize
+        )
+
+        if not result and ctypes.GetLastError() == ERROR_INSUFFICIENT_BUFFER:
+            passwordBuffer = (ctypes.c_ubyte * optionSize.value)()
+
+            result = winhttp.WinHttpQueryOption(
+                self.hRequest,
+                WINHTTP_OPTION_PROXY_PASSWORD,
+                optionBuffer,
+                optionSize
+            )
+
+        if not result:
+            self.raise_error(ctypes.GetLastError())
+
+        self.proxyPassword = bytes(passwordBuffer)
