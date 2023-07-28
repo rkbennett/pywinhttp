@@ -208,7 +208,7 @@ class request(object):
         self.responseHeaders = None
         self.content = None
         self.proxyUsername = None
-        self.usernamePassword = None
+        self.proxyPassword = None
         self.userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
 
 
@@ -424,7 +424,7 @@ class request(object):
             result = winhttp.WinHttpQueryOption(
                 self.hRequest,
                 WINHTTP_OPTION_PROXY_USERNAME,
-                optionBuffer,
+                usernameBuffer,
                 optionSize
             )
 
@@ -447,7 +447,7 @@ class request(object):
             result = winhttp.WinHttpQueryOption(
                 self.hRequest,
                 WINHTTP_OPTION_PROXY_PASSWORD,
-                optionBuffer,
+                passwordBuffer,
                 optionSize
             )
 
