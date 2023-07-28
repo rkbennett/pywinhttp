@@ -22,7 +22,8 @@ WINHTTP_QUERY_FLAG_WIRE_ENCODING = 16777216
 ERROR_INSUFFICIENT_BUFFER = 122
 WINHTTP_OPTION_PROXY_USERNAME = 0x1002
 WINHTTP_OPTION_PROXY_PASSWORD = 0x1003
-
+WINHTTP_ADDREQ_FLAG_COALESCE_WITH_SEMICOLON = 0x10000000
+ 
 errors = {
     6: "ERROR_INVALID_HANDLE",
     ERROR_INSUFFICIENT_BUFFER: "ERROR_INSUFFICIENT_BUFFER",
@@ -154,6 +155,14 @@ winhttp.WinHttpQueryHeaders.argtypes = [
     ctypes.wintypes.LPDWORD
 ]
 
+winhttp.WinHttpAddRequestHeaders.restype = ctypes.wintypes.BOOL
+winhttp.WinHttpAddRequestHeaders.argtypes = [
+    ctypes.wintypes.HANDLE,
+    ctypes.wintypes.LPCWSTR,
+    ctypes.wintypes.DWORD,
+    ctypes.wintypes.DWORD
+]
+
 winhttp.WinHttpQueryOption.restype = ctypes.wintypes.BOOL
 winhttp.WinHttpQueryOption.argtypes = [
     ctypes.wintypes.HANDLE,
@@ -218,7 +227,7 @@ class request(object):
         else:
             raise WindowsError(f"[{error_code}] Unknown error")
 
-    def Request(self, url, userAgent=None, data=None, securityLevel="medium"):
+    def Request(self, url, userAgent=None, data=None, securityLevel="medium", headers=None):
         if userAgent:
             self.userAgent = userAgent
 
@@ -286,6 +295,15 @@ class request(object):
 
         if not result:
             self.raise_error(ctypes.GetLastError())
+
+        if self.headers:
+            #headers = "foo: bar\r\n"
+            winhttp.WinHttpAddRequestHeaders(
+                hRequest,
+                self.headers,
+                -1,
+                WINHTTP_ADDREQ_FLAG_COALESCE_WITH_SEMICOLON
+            )
 
     def read(self):
         headerBuffer = ctypes.c_void_p()
