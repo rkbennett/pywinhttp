@@ -18,6 +18,7 @@ WINHTTP_AUTOLOGON_SECURITY_LEVEL_HIGH = ctypes.wintypes.DWORD(2)
 WINHTTP_OPTION_AUTOLOGON_POLICY = 77
 WINHTTP_OPTION_SECURITY_FLAGS = 31
 WINHTTP_OPTION_HTTP_VERSION = 59
+WINHTTP_OPTION_CONNECT_TIMEOUT = 3
 WINHTTP_QUERY_RAW_HEADERS = WINHTTP_QUERY_EX_ALL_HEADERS = 21
 WINHTTP_QUERY_RAW_HEADERS_CRLF = 22
 WINHTTP_QUERY_CONTENT_LENGTH = 5
@@ -237,6 +238,7 @@ class request(object):
         self.content = None
         self.proxyUsername = None
         self.verify = True
+        self.timeout = None
         self.proxyPassword = None
         self.http_version = None
         self.userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
@@ -248,7 +250,10 @@ class request(object):
         else:
             raise WindowsError(f"[{error_code}] Unknown error")
 
-    def Request(self, url: str, userAgent: str=None, data: dict=None, securityLevel: str="medium", headers: dict=None, http_version: float=None):
+    def Request(self, url: str, userAgent: str=None, data: dict=None, securityLevel: str="medium", headers: dict=None, http_version: float=None, timeout: int=None):
+
+        if timeout:
+            self.timeout = timeout
 
         if userAgent:
             self.userAgent = userAgent
@@ -317,6 +322,17 @@ class request(object):
                 WINHTTP_OPTION_SECURITY_FLAGS,
                 ctypes.byref(certFlags),
                 ctypes.sizeof(certFlags)
+            )
+            if not result:
+                self.raise_error(ctypes.GetLastError())
+        
+        if self.timeout:
+            dwTimeout = ctypes.wintypes.DWORD(int(self.timeout * 1000))
+            result = winhttp.WinHttpSetOption(
+                self.hRequest,
+                WINHTTP_OPTION_CONNECT_TIMEOUT,
+                ctypes.byref(dwTimeout),
+                ctypes.sizeof(dwTimeout)
             )
             if not result:
                 self.raise_error(ctypes.GetLastError())
