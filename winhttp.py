@@ -7,6 +7,8 @@ winhttp = ctypes.windll.winhttp
 WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY = 4
 WINHTTP_NO_PROXY_NAME = None
 WINHTTP_NO_PROXY_BYPASS = None
+TLS_10 = 0x00000080
+TLS_11 = 0x00000200
 WINHTTP_FLAG_ASYNC = 0
 WINHTTP_AUTH_TARGET_PROXY = 1
 WINHTTP_AUTH_SCHEME_NEGOTIATE = 16
@@ -14,6 +16,8 @@ WINHTTP_AUTOLOGON_SECURITY_LEVEL_LOW = ctypes.wintypes.DWORD(1)
 WINHTTP_AUTOLOGON_SECURITY_LEVEL_MEDIUM = ctypes.wintypes.DWORD(0)
 WINHTTP_AUTOLOGON_SECURITY_LEVEL_HIGH = ctypes.wintypes.DWORD(2)
 WINHTTP_OPTION_AUTOLOGON_POLICY = 77
+WINHTTP_OPTION_SECURITY_FLAGS = 31
+WINHTTP_OPTION_HTTP_VERSION = 59
 WINHTTP_QUERY_RAW_HEADERS = WINHTTP_QUERY_EX_ALL_HEADERS = 21
 WINHTTP_QUERY_RAW_HEADERS_CRLF = 22
 WINHTTP_QUERY_CONTENT_LENGTH = 5
@@ -23,6 +27,10 @@ ERROR_INSUFFICIENT_BUFFER = 122
 WINHTTP_OPTION_PROXY_USERNAME = 0x1002
 WINHTTP_OPTION_PROXY_PASSWORD = 0x1003
 WINHTTP_ADDREQ_FLAG_COALESCE_WITH_SEMICOLON = 0x10000000
+SECURITY_FLAG_IGNORE_UNKNOWN_CA = 0x00000100
+SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE = 0x00000200
+SECURITY_FLAG_IGNORE_CERT_CN_INVALID = 0x1000
+SECURITY_FLAG_IGNORE_CERT_DATE_INVALID = 0x2000
  
 errors = {
     6: "ERROR_INVALID_HANDLE",
@@ -82,23 +90,34 @@ securityLevels = {
     "high": WINHTTP_AUTOLOGON_SECURITY_LEVEL_HIGH
 }
 
-class WINHTTP_HEADER_NAME(ctypes.Union):
-    _fields_ = [
-        ("pwszName",ctypes.c_wchar_p),
-        ("pszName",ctypes.c_char_p),
-    ]
-
-class WINHTTP_HEADER_VALUE(ctypes.Union):
-    _fields_ = [
-        ("pwszValue",ctypes.c_wchar_p),
-        ("pszValue",ctypes.c_char_p),
-    ]
-
 class WINHTTP_EXTENDED_HEADER(ctypes.Structure):
-    _anonymous_ = (
-        "WINHTTP_HEADER_NAME", 
-        "WINHTTP_HEADER_VALUE"
-    )
+    # _anonymous_ = (
+    #     "WINHTTP_HEADER_NAME", 
+    #     "WINHTTP_HEADER_VALUE"
+    # )
+    class _NAME_UNION(ctypes.Union):
+        _fields_ = [
+            ("pwszName", ctypes.c_wchar_p),
+            ("pszName", ctypes.c_char_p)
+        ]
+
+    class _VALUE_UNION(ctypes.Union):
+        _fields_ = [
+            ("pwszValue", ctypes.c_wchar_p),
+            ("pszValue", ctypes.c_char_p)
+        ]
+
+    _anonymous_ = ("name", "value")
+    _fields_ = [
+        ("name", _NAME_UNION),
+        ("value", _VALUE_UNION)
+    ]
+
+class HTTP_VERSION_INFO(ctypes.Structure):
+    _fields_ = [
+        ("dwMajorVersion", ctypes.wintypes.DWORD),
+        ("dwMinorVersion", ctypes.wintypes.DWORD)
+    ]
 
 winhttp.WinHttpOpen.restype = ctypes.wintypes.HANDLE
 winhttp.WinHttpOpen.argtypes = [
@@ -217,7 +236,9 @@ class request(object):
         self.responseHeaders = None
         self.content = None
         self.proxyUsername = None
+        self.verify = True
         self.proxyPassword = None
+        self.http_version = None
         self.userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
 
 
@@ -227,12 +248,19 @@ class request(object):
         else:
             raise WindowsError(f"[{error_code}] Unknown error")
 
-    def Request(self, url, userAgent=None, data=None, securityLevel="medium", headers=None):
+    def Request(self, url: str, userAgent: str=None, data: dict=None, securityLevel: str="medium", headers: dict=None, http_version: float=None):
+
         if userAgent:
             self.userAgent = userAgent
 
         if not data:
             self.method = "GET"
+
+        if http_version:
+            self.http_version = http_version
+
+        if headers:
+            self.headers = "\r\n".join([f"{k}: {v}" for k,v in headers.items()])
 
         if securityLevel.lower() not in ["low", "medium", "high"]:
             self.securityLevel = securityLevels["medium"]
@@ -264,6 +292,11 @@ class request(object):
         if not self.hConnect or int(self.hConnect) < 1:
             self.raise_error(ctypes.GetLastError())
 
+        if url.startswith("https://"):
+            iFlag = ctypes.wintypes.DWORD(0x00800000)
+        else:
+            iFlag = ctypes.wintypes.DWORD(0x00000000)
+        
         self.hRequest = winhttp.WinHttpOpenRequest(
             ctypes.c_void_p(self.hConnect),
             ctypes.c_wchar_p(self.method),
@@ -271,11 +304,22 @@ class request(object):
             ctypes.c_wchar_p(None),
             ctypes.c_wchar_p(None),
             ctypes.c_wchar_p(None),
-            ctypes.wintypes.DWORD(0x00000000)
+            iFlag
         )
 
         if not self.hRequest or self.hRequest < 1:
             self.raise_error(ctypes.GetLastError())
+
+        if not self.verify:
+            certFlags = ctypes.wintypes.DWORD(SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE | SECURITY_FLAG_IGNORE_CERT_CN_INVALID | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID)
+            result = winhttp.WinHttpSetOption(
+                self.hRequest,
+                WINHTTP_OPTION_SECURITY_FLAGS,
+                ctypes.byref(certFlags),
+                ctypes.sizeof(certFlags)
+            )
+            if not result:
+                self.raise_error(ctypes.GetLastError())
 
         result = winhttp.WinHttpSetOption(
             self.hRequest,
@@ -299,13 +343,34 @@ class request(object):
         if self.headers:
             #headers = "foo: bar\r\n"
             winhttp.WinHttpAddRequestHeaders(
-                hRequest,
+                self.hRequest,
                 self.headers,
                 -1,
                 WINHTTP_ADDREQ_FLAG_COALESCE_WITH_SEMICOLON
             )
 
     def read(self):
+        if self.http_version in [1.0, 1.1]:
+            old_http_version = HTTP_VERSION_INFO()
+            old_http_version_len = ctypes.wintypes.DWORD(ctypes.sizeof(old_http_version))
+            result = winhttp.WinHttpQueryOption(
+                self.hRequest,
+                WINHTTP_OPTION_HTTP_VERSION,
+                ctypes.byref(old_http_version),
+                ctypes.byref(old_http_version_len)
+            )
+            httpVersion = HTTP_VERSION_INFO()
+            httpVersion.dwMajorVersion = int(self.http_version)
+            httpVersion.dwMinorVersion = int(str(self.http_version).split('.')[-1])
+            result = winhttp.WinHttpSetOption(
+                self.hRequest,
+                WINHTTP_OPTION_HTTP_VERSION,
+                ctypes.byref(httpVersion),
+                ctypes.sizeof(httpVersion)
+            )
+            if not result:
+                self.raise_error(ctypes.GetLastError())
+
         headerBuffer = ctypes.c_void_p()
 
         result = winhttp.WinHttpSendRequest(
@@ -330,22 +395,44 @@ class request(object):
             self.raise_error(ctypes.GetLastError())
 
         try:
+            headersEx = False
             winhttp.WinHttpQueryHeadersEx.restype = ctypes.wintypes.DWORD
             headerStruct = WINHTTP_EXTENDED_HEADER()
+            pHeaderStruct = ctypes.pointer(headerStruct)
             headerCount = ctypes.wintypes.DWORD()
-            headerBuffer = (ctypes.c_ubyte * 9999)()
+            headerIndex = ctypes.wintypes.PDWORD()
+            headerSize = ctypes.c_ulong(0)
             result = winhttp.WinHttpQueryHeadersEx(
                 ctypes.wintypes.HANDLE(self.hRequest),
                 ctypes.wintypes.DWORD(WINHTTP_QUERY_EX_ALL_HEADERS),
                 ctypes.c_ulonglong(0),
                 ctypes.c_uint(0),
-                ctypes.wintypes.PDWORD(None),
-                None, #byref(winhttp_header),
-                ctypes.byref(headerBuffer),
-                ctypes.wintypes.PDWORD(ctypes.sizeof(headerBuffer)),
-                ctypes.wintypes.HANDLE(headerStruct),
+                headerIndex,
+                None,
+                None,
+                ctypes.byref(headerSize),
+                ctypes.byref(pHeaderStruct),
                 ctypes.byref(headerCount)
             )
+            if headerSize.value > 0:
+                headerStruct = (WINHTTP_EXTENDED_HEADER * headerCount.value)()
+                pHeaderStruct = ctypes.pointer(headerStruct)
+                headerBuffer = (ctypes.c_ubyte * headerSize.value)()
+                result = winhttp.WinHttpQueryHeadersEx(
+                    ctypes.wintypes.HANDLE(self.hRequest),
+                    ctypes.wintypes.DWORD(WINHTTP_QUERY_EX_ALL_HEADERS),
+                    ctypes.c_ulonglong(0),
+                    ctypes.c_uint(0),
+                    headerIndex,
+                    None,
+                    ctypes.byref(headerBuffer),
+                    ctypes.byref(headerSize),
+                    ctypes.byref(pHeaderStruct),
+                    ctypes.byref(headerCount)
+                )
+            if result:
+                self.raise_error(ctypes.GetLastError())
+            self.responseHeaders = {hStruct.pwszName: hStruct.pwszValue  for hStruct in pHeaderStruct.contents}
         except AttributeError as e:
             headerSize = ctypes.wintypes.DWORD(0)
             result = winhttp.WinHttpQueryHeaders(
@@ -356,7 +443,6 @@ class request(object):
                 headerSize,
                 None
             )
-
             if not result and ctypes.GetLastError() == ERROR_INSUFFICIENT_BUFFER:
                 headerBuffer = (ctypes.c_ubyte * headerSize.value)()
                 result = winhttp.WinHttpQueryHeaders(
@@ -367,15 +453,12 @@ class request(object):
                     ctypes.wintypes.DWORD(ctypes.sizeof(headerBuffer)),
                     None
                 )
-
-        if not result:
-            self.raise_error(ctypes.GetLastError())
-
-        rawHeaders = bytes(headerBuffer).decode('utf-16').rstrip('\0').split('\r\n')[1:-2]
-        self.responseHeaders = [{header.split(':')[0]:header.split(':')[1].lstrip()} for header in rawHeaders]
+            if not result and not headersEx:
+                self.raise_error(ctypes.GetLastError())
+            rawHeaders = bytes(headerBuffer).decode('utf-16').rstrip('\0').split('\r\n')[1:-2]
+            self.responseHeaders = {header.split(':')[0]:header.split(':')[1].lstrip() for header in rawHeaders}
 
         bytesAvailable = ctypes.c_ulong(0)
-
         result = winhttp.WinHttpQueryDataAvailable(
             self.hRequest,
             bytesAvailable
@@ -408,6 +491,16 @@ class request(object):
 
         self.content = payload.decode()
 
+        if self.http_version in [1.0, 1.1]:
+            result = winhttp.WinHttpSetOption(
+                self.hRequest,
+                WINHTTP_OPTION_HTTP_VERSION,
+                ctypes.byref(old_http_version),
+                ctypes.sizeof(old_http_version)
+            )
+            if not result:
+                self.raise_error(ctypes.GetLastError())
+
         return self.content
 
     def json(self):
@@ -425,51 +518,4 @@ class request(object):
         self.hInternet = None
 
         if not result:
-            raise_error(ctypes.GetLastError())
-
-    def get_proxy_creds(self):
-        optionSize = ctypes.wintypes.DWORD(0)
-        result = winhttp.WinHttpQueryOption(
-            self.hRequest,
-            WINHTTP_OPTION_PROXY_USERNAME,
-            None,
-            optionSize
-        )
-
-        if not result and ctypes.GetLastError() == ERROR_INSUFFICIENT_BUFFER:
-            usernameBuffer = (ctypes.c_ubyte * optionSize.value)()
-
-            result = winhttp.WinHttpQueryOption(
-                self.hRequest,
-                WINHTTP_OPTION_PROXY_USERNAME,
-                usernameBuffer,
-                optionSize
-            )
-
-        if not result:
             self.raise_error(ctypes.GetLastError())
-
-        self.proxyUsername = bytes(usernameBuffer)
-
-        optionSize = ctypes.wintypes.DWORD(0)
-        result = winhttp.WinHttpQueryOption(
-            self.hRequest,
-            WINHTTP_OPTION_PROXY_PASSWORD,
-            None,
-            optionSize
-        )
-
-        if not result and ctypes.GetLastError() == ERROR_INSUFFICIENT_BUFFER:
-            passwordBuffer = (ctypes.c_ubyte * optionSize.value)()
-
-            result = winhttp.WinHttpQueryOption(
-                self.hRequest,
-                WINHTTP_OPTION_PROXY_PASSWORD,
-                passwordBuffer,
-                optionSize
-            )
-
-        if not result:
-            self.raise_error(ctypes.GetLastError())
-
-        self.proxyPassword = bytes(passwordBuffer)
