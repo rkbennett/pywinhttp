@@ -262,7 +262,7 @@ class Request(object):
             self.userAgent = userAgent
         
         if method and method in ["GET", "PUT", "POST"]:
-            self.__dict__.method = method
+            self.method = method
         
         if securityLevel.lower() in ["low", "medium", "high"]:
             self.securityLevel = securityLevel
@@ -557,7 +557,7 @@ class opener(object):
             if not result:
                 _raise_error(ctypes.GetLastError())
 
-        self.raw = payload.decode()
+        self.raw = payload
 
         if http_version in [1.0, 1.1]:
             result = winhttp.WinHttpSetOption(
@@ -577,15 +577,6 @@ class opener(object):
 
         if not result:
             _raise_error(ctypes.GetLastError())
-
-     #result = winhttp.WinHttpSetCredentials(
-        #    self.hRequest,
-        #    WINHTTP_AUTH_TARGET_PROXY,
-        #    WINHTTP_AUTH_SCHEME_NEGOTIATE,
-        #    None,
-        #    None,
-        #    None
-        #)
 
     def read(self):
         return self.raw
