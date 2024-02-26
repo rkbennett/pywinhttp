@@ -2,6 +2,8 @@ import json
 import ctypes
 import ctypes.wintypes
 
+from urllib.parse import urlencode
+
 winhttp = ctypes.windll.winhttp
 
 WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY = 4
@@ -239,6 +241,7 @@ class request(object):
         self.proxyUsername = None
         self.verify = True
         self.timeout = None
+        self.data = None
         self.proxyPassword = None
         self.http_version = None
         self.userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
@@ -250,7 +253,10 @@ class request(object):
         else:
             raise WindowsError(f"[{error_code}] Unknown error")
 
-    def Request(self, url: str, userAgent: str=None, data: dict=None, securityLevel: str="medium", headers: dict=None, http_version: float=None, timeout: int=None):
+    def Request(self, url: str, userAgent: str=None, data: bytes=None, securityLevel: str="medium", headers: dict=None, http_version: float=None, timeout: int=None, method: str=None):
+
+        if isinstance(data, str):
+            data = data.encode()
 
         if timeout:
             self.timeout = timeout
@@ -258,7 +264,14 @@ class request(object):
         if userAgent:
             self.userAgent = userAgent
 
-        if not data:
+        self.data = data
+
+        if method not in ["GET", "PUT", "POST"]:
+            self.method = "GET"
+        else:
+            self.method = method
+
+        if not data and not method:
             self.method = "GET"
 
         if http_version:
@@ -389,13 +402,21 @@ class request(object):
 
         headerBuffer = ctypes.c_void_p()
 
+        if self.method in ["PUT", "POST"]:
+            dataArray = ctypes.create_string_buffer(self.data)
+            pData = ctypes.byref(dataArray)
+            dataLen = len(self.data)
+        else:
+            pData = ctypes.c_void_p()
+            dataLen = 0
+
         result = winhttp.WinHttpSendRequest(
             self.hRequest,
             None,
             0,
-            headerBuffer,
-            0,
-            0,
+            pData,
+            dataLen,
+            dataLen,
             0
         )
 
