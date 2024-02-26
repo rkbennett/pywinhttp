@@ -26,6 +26,7 @@ WINHTTP_QUERY_RAW_HEADERS_CRLF = 22
 WINHTTP_QUERY_CONTENT_LENGTH = 5
 WINHTTP_QUERY_CUSTOM = 65535
 WINHTTP_QUERY_FLAG_WIRE_ENCODING = 16777216
+WINHTTP_CALLBACK_FLAG_REDIRECT = 0x00004000
 ERROR_INSUFFICIENT_BUFFER = 122
 WINHTTP_OPTION_PROXY_USERNAME = 0x1002
 WINHTTP_OPTION_PROXY_PASSWORD = 0x1003
@@ -139,6 +140,13 @@ winhttp.WinHttpConnect.argtypes = [
     ctypes.wintypes.DWORD
 ]
 
+winhttp.WinHttpSetStatusCallback.argtypes = [
+    ctypes.wintypes.HANDLE,
+    ctypes.c_void_p,
+    ctypes.wintypes.DWORD,
+    ctypes.POINTER(ctypes.wintypes.DWORD)
+]
+
 winhttp.WinHttpOpenRequest.restype = ctypes.wintypes.HANDLE
 winhttp.WinHttpOpenRequest.argtypes = [
     ctypes.wintypes.HANDLE,
@@ -230,94 +238,130 @@ winhttp.WinHttpSetCredentials.argtypes = [
     ctypes.wintypes.LPVOID
 ]
 
-class request(object):
-    def __init__(self):
-        self.hInternet = None
-        self.hConnect = None
-        self.hRequest = None
-        self.headers = None
-        self.responseHeaders = None
-        self.content = None
-        self.proxyUsername = None
-        self.verify = True
-        self.timeout = None
-        self.data = None
-        self.proxyPassword = None
-        self.http_version = None
-        self.userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+def _raise_error(error_code):
+    if error_code in errors:
+        raise WindowsError(f"[{error_code}] {errors[error_code]}")
+    else:
+        raise WindowsError(f"[{error_code}] Unknown error")
 
-
-    def raise_error(self, error_code):
-        if error_code in errors:
-            raise WindowsError(f"[{error_code}] {errors[error_code]}")
-        else:
-            raise WindowsError(f"[{error_code}] Unknown error")
-
-    def Request(self, url: str, userAgent: str=None, data: bytes=None, securityLevel: str="medium", headers: dict=None, http_version: float=None, timeout: int=None, method: str=None):
-
-        if isinstance(data, str):
-            data = data.encode()
-
-        if timeout:
-            self.timeout = timeout
-
-        if userAgent:
+class Request(object):
+    def __init__(self, url: str, userAgent: str=None, securityLevel: str="medium", headers: dict=None, http_version: float=None, method: str=None):
+        if not isinstance(url, str):
+            raise ValueError("'url' must be of type 'str'")
+        self.__dict__.update(
+            {
+                "url": url,
+                "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+                "securityLevel": "medium",
+                "headers": None,
+                "http_version": None,
+                "method": "GET"
+            }
+        )
+        if isinstance(userAgent, str):
             self.userAgent = userAgent
+        
+        if method and method in ["GET", "PUT", "POST"]:
+            self.__dict__.method = method
+        
+        if securityLevel.lower() in ["low", "medium", "high"]:
+            self.securityLevel = securityLevel
+        
+        if isinstance(headers, dict):
+            self.headers = headers
+        elif headers:
+            raise ValueError("'headers' must be type 'dict'")
 
-        self.data = data
-
-        if method not in ["GET", "PUT", "POST"]:
-            self.method = "GET"
-        else:
-            self.method = method
-
-        if not data and not method:
-            self.method = "GET"
-
-        if http_version:
+        if isinstance(http_version, float) and http_version in [1.0, 1.1]:
             self.http_version = http_version
 
+class opener(object):
+    def __init__(self, target, data: bytes=None, timeout: int=None, verify: bool=True):
+        if isinstance(target, str):
+            self.url = target
+            userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+            securityLevel = securityLevels["medium"]
+            headers = None
+            http_version = None
+            method = None
+        elif isinstance(target, Request):
+            self.url = target.url
+            userAgent = target.userAgent
+            securityLevel = securityLevels[target.securityLevel.lower()]
+            headers = target.headers
+            http_version = target.http_version
+            method = target.method
+
+        if data:
+            if isinstance(data, str):
+                data = data.encode()
+            elif isinstance(data, bytes):
+                pass
+            elif data:
+                raise ValueError("'data' must be type 'bytes' or 'str'")
+            if not method:
+                method = "POST"
+        
+        if not isinstance(timeout, int):
+            timeout = None
+        
         if headers:
-            self.headers = "\r\n".join([f"{k}: {v}" for k,v in headers.items()])
-
-        if securityLevel.lower() not in ["low", "medium", "high"]:
-            self.securityLevel = securityLevels["medium"]
-        else:
-            self.securityLevel = securityLevels[securityLevel.lower()]
-
-        spliturl = url.split('http://')[-1].split('https://')[-1].split('/')
+            headers = "\r\n".join([f"{k}: {v}" for k,v in headers.items()])
+        
+        spliturl = self.url.split('http://')[-1].split('https://')[-1].split('/')
         hostname = spliturl[0]
         path = "/" + "/".join(spliturl[1:])
 
-        self.hInternet = winhttp.WinHttpOpen(
-            ctypes.wintypes.LPCWSTR(self.userAgent),
+        hInternet = winhttp.WinHttpOpen(
+            ctypes.wintypes.LPCWSTR(userAgent),
             WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
             WINHTTP_NO_PROXY_NAME,
             WINHTTP_NO_PROXY_BYPASS, 
             WINHTTP_FLAG_ASYNC
         )
 
-        if not self.hInternet or int(self.hInternet) < 1:
-            self.raise_error(ctypes.GetLastError())
+        if not hInternet or int(hInternet) < 1:
+            _raise_error(ctypes.GetLastError())
 
-        self.hConnect = winhttp.WinHttpConnect(
-            self.hInternet,
+        callback_type = ctypes.CFUNCTYPE(
+            None, 
+            ctypes.wintypes.HANDLE, 
+            ctypes.POINTER(ctypes.wintypes.DWORD), 
+            ctypes.wintypes.DWORD, 
+            ctypes.c_void_p, 
+            ctypes.wintypes.DWORD
+        )
+
+        callback = callback_type(self.redirect_callback)
+
+        hResult = winhttp.WinHttpSetStatusCallback(
+            hInternet,
+            callback,
+            WINHTTP_CALLBACK_FLAG_REDIRECT,
+            None
+        )
+
+        if hResult == -1:
+            raise OSError("Failed to set redirect callback with 'WINHTTP_INVALID_STATUS_CALLBACK'")
+
+        hConnect = winhttp.WinHttpConnect(
+            hInternet,
             hostname,
             0,
             0
         )
 
-        if not self.hConnect or int(self.hConnect) < 1:
-            self.raise_error(ctypes.GetLastError())
+        if not hConnect or int(hConnect) < 1:
+            _raise_error(ctypes.GetLastError())
 
-        if url.startswith("https://"):
+        if self.url.startswith("https://"):
             iFlag = ctypes.wintypes.DWORD(0x00800000)
         else:
             iFlag = ctypes.wintypes.DWORD(0x00000000)
         
-        self.hRequest = winhttp.WinHttpOpenRequest(
-            ctypes.c_void_p(self.hConnect),
-            ctypes.c_wchar_p(self.method),
+        hRequest = winhttp.WinHttpOpenRequest(
+            ctypes.c_void_p(hConnect),
+            ctypes.c_wchar_p(method),
             ctypes.c_wchar_p(path),
             ctypes.c_wchar_p(None),
             ctypes.c_wchar_p(None),
@@ -325,93 +369,80 @@ class request(object):
             iFlag
         )
 
-        if not self.hRequest or self.hRequest < 1:
-            self.raise_error(ctypes.GetLastError())
+        if not hRequest or hRequest < 1:
+            _raise_error(ctypes.GetLastError())
 
-        if not self.verify:
+        if not verify:
             certFlags = ctypes.wintypes.DWORD(SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE | SECURITY_FLAG_IGNORE_CERT_CN_INVALID | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID)
             result = winhttp.WinHttpSetOption(
-                self.hRequest,
+                hRequest,
                 WINHTTP_OPTION_SECURITY_FLAGS,
                 ctypes.byref(certFlags),
                 ctypes.sizeof(certFlags)
             )
             if not result:
-                self.raise_error(ctypes.GetLastError())
+                _raise_error(ctypes.GetLastError())
         
-        if self.timeout:
-            dwTimeout = ctypes.wintypes.DWORD(int(self.timeout * 1000))
+        if timeout:
+            dwTimeout = ctypes.wintypes.DWORD(int(timeout * 1000))
             result = winhttp.WinHttpSetOption(
-                self.hRequest,
+                hRequest,
                 WINHTTP_OPTION_CONNECT_TIMEOUT,
                 ctypes.byref(dwTimeout),
                 ctypes.sizeof(dwTimeout)
             )
             if not result:
-                self.raise_error(ctypes.GetLastError())
+                _raise_error(ctypes.GetLastError())
 
         result = winhttp.WinHttpSetOption(
-            self.hRequest,
+            hRequest,
             WINHTTP_OPTION_AUTOLOGON_POLICY,
-            ctypes.byref(self.securityLevel),
-            ctypes.sizeof(self.securityLevel)
+            ctypes.byref(securityLevel),
+            ctypes.sizeof(securityLevel)
         )
 
-        #result = winhttp.WinHttpSetCredentials(
-        #    self.hRequest,
-        #    WINHTTP_AUTH_TARGET_PROXY,
-        #    WINHTTP_AUTH_SCHEME_NEGOTIATE,
-        #    None,
-        #    None,
-        #    None
-        #)
-
         if not result:
-            self.raise_error(ctypes.GetLastError())
+            _raise_error(ctypes.GetLastError())
 
-        if self.headers:
-            #headers = "foo: bar\r\n"
+        if headers:
             winhttp.WinHttpAddRequestHeaders(
-                self.hRequest,
-                self.headers,
+                hRequest,
+                headers,
                 -1,
                 WINHTTP_ADDREQ_FLAG_COALESCE_WITH_SEMICOLON
             )
 
-    def read(self):
-        if self.http_version in [1.0, 1.1]:
+        if http_version in [1.0, 1.1]:
             old_http_version = HTTP_VERSION_INFO()
             old_http_version_len = ctypes.wintypes.DWORD(ctypes.sizeof(old_http_version))
             result = winhttp.WinHttpQueryOption(
-                self.hRequest,
+                hRequest,
                 WINHTTP_OPTION_HTTP_VERSION,
                 ctypes.byref(old_http_version),
                 ctypes.byref(old_http_version_len)
             )
             httpVersion = HTTP_VERSION_INFO()
-            httpVersion.dwMajorVersion = int(self.http_version)
-            httpVersion.dwMinorVersion = int(str(self.http_version).split('.')[-1])
+            httpVersion.dwMajorVersion = int(http_version)
+            httpVersion.dwMinorVersion = int(str(http_version).split('.')[-1])
             result = winhttp.WinHttpSetOption(
-                self.hRequest,
+                hRequest,
                 WINHTTP_OPTION_HTTP_VERSION,
                 ctypes.byref(httpVersion),
                 ctypes.sizeof(httpVersion)
             )
             if not result:
-                self.raise_error(ctypes.GetLastError())
+                _raise_error(ctypes.GetLastError())
 
-        headerBuffer = ctypes.c_void_p()
-
-        if self.method in ["PUT", "POST"]:
-            dataArray = ctypes.create_string_buffer(self.data)
+        if method in ["PUT", "POST"]:
+            dataArray = ctypes.create_string_buffer(data)
             pData = ctypes.byref(dataArray)
-            dataLen = len(self.data)
+            dataLen = len(data)
         else:
             pData = ctypes.c_void_p()
             dataLen = 0
 
         result = winhttp.WinHttpSendRequest(
-            self.hRequest,
+            hRequest,
             None,
             0,
             pData,
@@ -421,15 +452,15 @@ class request(object):
         )
 
         if not result:
-            self.raise_error(ctypes.GetLastError())
+            _raise_error(ctypes.GetLastError())
 
         result = winhttp.WinHttpReceiveResponse(
-            self.hRequest,
+            hRequest,
             None
         )
 
         if not result:
-            self.raise_error(ctypes.GetLastError())
+            _raise_error(ctypes.GetLastError())
 
         try:
             headersEx = False
@@ -440,7 +471,7 @@ class request(object):
             headerIndex = ctypes.wintypes.PDWORD()
             headerSize = ctypes.c_ulong(0)
             result = winhttp.WinHttpQueryHeadersEx(
-                ctypes.wintypes.HANDLE(self.hRequest),
+                ctypes.wintypes.HANDLE(hRequest),
                 ctypes.wintypes.DWORD(WINHTTP_QUERY_EX_ALL_HEADERS),
                 ctypes.c_ulonglong(0),
                 ctypes.c_uint(0),
@@ -456,7 +487,7 @@ class request(object):
                 pHeaderStruct = ctypes.pointer(headerStruct)
                 headerBuffer = (ctypes.c_ubyte * headerSize.value)()
                 result = winhttp.WinHttpQueryHeadersEx(
-                    ctypes.wintypes.HANDLE(self.hRequest),
+                    ctypes.wintypes.HANDLE(hRequest),
                     ctypes.wintypes.DWORD(WINHTTP_QUERY_EX_ALL_HEADERS),
                     ctypes.c_ulonglong(0),
                     ctypes.c_uint(0),
@@ -468,12 +499,12 @@ class request(object):
                     ctypes.byref(headerCount)
                 )
             if result:
-                self.raise_error(ctypes.GetLastError())
+                _raise_error(ctypes.GetLastError())
             self.responseHeaders = {hStruct.pwszName: hStruct.pwszValue  for hStruct in pHeaderStruct.contents}
         except AttributeError as e:
             headerSize = ctypes.wintypes.DWORD(0)
             result = winhttp.WinHttpQueryHeaders(
-                self.hRequest,
+                hRequest,
                 WINHTTP_QUERY_RAW_HEADERS_CRLF,
                 None,
                 None,
@@ -483,7 +514,7 @@ class request(object):
             if not result and ctypes.GetLastError() == ERROR_INSUFFICIENT_BUFFER:
                 headerBuffer = (ctypes.c_ubyte * headerSize.value)()
                 result = winhttp.WinHttpQueryHeaders(
-                    self.hRequest,
+                    hRequest,
                     WINHTTP_QUERY_RAW_HEADERS_CRLF,
                     None,
                     ctypes.byref(headerBuffer),
@@ -491,18 +522,18 @@ class request(object):
                     None
                 )
             if not result and not headersEx:
-                self.raise_error(ctypes.GetLastError())
+                _raise_error(ctypes.GetLastError())
             rawHeaders = bytes(headerBuffer).decode('utf-16').rstrip('\0').split('\r\n')[1:-2]
             self.responseHeaders = {header.split(':')[0]:header.split(':')[1].lstrip() for header in rawHeaders}
 
         bytesAvailable = ctypes.c_ulong(0)
         result = winhttp.WinHttpQueryDataAvailable(
-            self.hRequest,
+            hRequest,
             bytesAvailable
         )
 
         if not result:
-            self.raise_error(ctypes.GetLastError())
+            _raise_error(ctypes.GetLastError())
 
         payload = b""
 
@@ -511,48 +542,59 @@ class request(object):
             bytesToRead = bytesAvailable.value
             bytesRead = ctypes.wintypes.DWORD(0)
             result = winhttp.WinHttpReadData(
-                self.hRequest,
+                hRequest,
                 readBuffer,
                 bytesToRead,
                 bytesRead
             )
             if not result:
-                self.raise_error(ctypes.GetLastError())
+                _raise_error(ctypes.GetLastError())
             payload += bytes(readBuffer)
             result = winhttp.WinHttpQueryDataAvailable(
-                self.hRequest,
+                hRequest,
                 bytesAvailable
             )
             if not result:
-                self.raise_error(ctypes.GetLastError())
+                _raise_error(ctypes.GetLastError())
 
-        self.content = payload.decode()
+        self.raw = payload.decode()
 
-        if self.http_version in [1.0, 1.1]:
+        if http_version in [1.0, 1.1]:
             result = winhttp.WinHttpSetOption(
-                self.hRequest,
+                hRequest,
                 WINHTTP_OPTION_HTTP_VERSION,
                 ctypes.byref(old_http_version),
                 ctypes.sizeof(old_http_version)
             )
             if not result:
-                self.raise_error(ctypes.GetLastError())
+                _raise_error(ctypes.GetLastError())
 
-        return self.content
-
-    def json(self):
-        if not self.hRequest:
-            raise BaseException("No Request object exists, Request() object must be instantiated")
-        if not self.content:
-            self.read()
-        return json.loads(self.content)
-
-    def close(self):
         result = winhttp.WinHttpCloseHandle(
-            self.hInternet
+            hInternet
         )
 
-        self.hInternet = None
+        hInternet = None
 
         if not result:
-            self.raise_error(ctypes.GetLastError())
+            _raise_error(ctypes.GetLastError())
+
+     #result = winhttp.WinHttpSetCredentials(
+        #    self.hRequest,
+        #    WINHTTP_AUTH_TARGET_PROXY,
+        #    WINHTTP_AUTH_SCHEME_NEGOTIATE,
+        #    None,
+        #    None,
+        #    None
+        #)
+
+    def read(self):
+        return self.raw
+
+    def json(self):
+        if not self.raw:
+            raise BaseException("No response data exists")
+        return json.loads(self.raw)
+
+    def redirect_callback(self, hInternet, dwContext, dwInternetStatus, lpvStatusInformation, dwStatusInformationLength):
+        pUrl = ctypes.cast(lpvStatusInformation, ctypes.wintypes.LPWSTR)
+        self.url = pUrl.value
